@@ -1,6 +1,7 @@
 import bonobo
 import bonobo_sqlalchemy
 import sqlalchemy
+from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy import Table, MetaData
 import os
 
@@ -119,9 +120,11 @@ def get_services(**options):
     return {}
 
 
-def insert_into(tablename):
+def insert_into(tablename, constraint):
     def table_insert(row):
-        engine.connect().execute(Table(tablename, MetaData(), autoload=True, autoload_with=engine).insert(), row)
+        upsert = insert(Table(tablename, MetaData(), autoload=True, autoload_with=engine)) \
+            .on_conflict_do_update(constraint=constraint, set_=row)
+        engine.connect().execute(upsert, row)
 
     return table_insert
 
@@ -132,11 +135,11 @@ def get_graph(**options):
         extract_fedex,
         transform_fedex,
         filter_table('shipments'),
-        insert_into('shipments'),
+        insert_into('shipments', 'shipments_pkey'),
     )
     graph.add_chain(
         filter_table('charges'),
-        insert_into('charges'),
+        insert_into('charges', 'charges_charge_index_shipment_id_key'),
         _input=transform_fedex
     )
     return graph
