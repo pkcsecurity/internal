@@ -1,20 +1,14 @@
-import bonobo
-import bonobo_sqlalchemy
-import sqlalchemy
-from sqlalchemy.dialects.postgresql import insert
-from sqlalchemy import Table, MetaData
-import os
-
-import carrier_formats
 import csv
-import re
 
-# This isn't really the right way to configure a DB connection with bonobo, it should be in get_services
-engine = sqlalchemy.create_engine(os.environ['DATABASE_URL'])
-conn = engine.connect()
+from utils import permissive_numeric_parse
+
+fedex_multi_fields = [
+    'Tracking ID Charge Description',
+    'Tracking ID Charge Amount',
+]
 
 
-def extract_fedex():
+def extract():
     with open('fedex.csv') as file:
         lines = csv.reader(file)
         header = lines.__next__()
@@ -22,7 +16,7 @@ def extract_fedex():
             # This is to deal with the fact that fedex has multiple
             line_dict = {}
             for field_name, content in zip(header, line):
-                if field_name in carrier_formats.fedex_multi_fields:
+                if field_name in fedex_multi_fields:
                     if field_name not in line_dict:
                         line_dict[field_name] = []
                     line_dict[field_name].append(content)
@@ -31,18 +25,19 @@ def extract_fedex():
             yield line_dict
 
 
-def permissive_numeric_parse(s):
-    try:
-        return float(re.sub('[^0-9.-]', '', s))
-    except:
-        return None
-
-
-def transform_fedex(args):
+def transform(args):
+    # When we detect fedex's guaranteed delivery date, it will depend on the zone code and service type.  For
+    # More detail, see http://images.fedex.com/us/services/pdf/Service_Guide_2017.pdf
     tracking_id = args.get('Express or Ground Tracking ID')
     shipment_date = args.get('Shipment Date')
     shipment_id = tracking_id + '~' + shipment_date
     charge_index = 0
+    transportation_charge_amount = permissive_numeric_parse(args.get('Transportation Charge Amount'))
+    yield ('charges',
+           {'charge_index': charge_index,
+            'description': 'Transportation Charge',
+            'shipment_id': shipment_id,
+            'amount': transportation_charge_amount})
     for description, amount in zip(
             args.get('Tracking ID Charge Description'),
             args.get('Tracking ID Charge Amount')
@@ -63,7 +58,7 @@ def transform_fedex(args):
         'invoice_number': args.get('Invoice Number'),
         'payor': args.get('Payor'),
         'tracking_number': tracking_id,
-        'transportation_charge_amount': args.get('Transportation Charge Amount'),
+        'transportation_charge_amount': transportation_charge_amount,
         'net_charge_amount': permissive_numeric_parse(args.get('Net Charge Amount')),
         'service_type': args.get('Service Type'),
         'ground_service': args.get('Ground Service'),
@@ -105,59 +100,3 @@ def transform_fedex(args):
         'zone_code': args.get('Zone Code'),
     }
     yield ('shipments', shipment_details)
-
-
-def filter_table(table_name):
-    def value_generator(table, row):
-        print(table, row)
-        if table == table_name:
-            yield row
-
-    return value_generator
-
-
-def get_services(**options):
-    return {}
-
-
-def insert_into(tablename, constraint):
-    def table_insert(row):
-        upsert = insert(Table(tablename, MetaData(), autoload=True, autoload_with=engine)) \
-            .on_conflict_do_update(constraint=constraint, set_=row)
-        engine.connect().execute(upsert, row)
-
-    return table_insert
-
-
-def get_graph(**options):
-    graph = bonobo.Graph()
-    graph.add_chain(
-        extract_fedex,
-        transform_fedex,
-        filter_table('shipments'),
-        insert_into('shipments', 'shipments_pkey'),
-    )
-    graph.add_chain(
-        filter_table('charges'),
-        insert_into('charges', 'charges_charge_index_shipment_id_key'),
-        _input=transform_fedex
-    )
-    return graph
-
-
-if __name__ == '__main__':
-    """
-    from carrier_formats import fedex_cols, ups_cols
-    all_cols = [col + '-ups' for col in ups_cols]
-    all_cols.extend([col + '-fedex' for col in fedex_cols])
-    for col in sorted(all_cols):
-        print(col)
-    # print("intersection: ", set(ups_cols).intersection(set(fedex_cols)))
-    """
-    parser = bonobo.get_argument_parser()
-    with bonobo.parse_args(parser) as options:
-        bonobo.run(
-            get_graph(**options),
-            services=get_services(**options)
-        )
-    # """

@@ -50,7 +50,7 @@ create table shipments (
 
 create table charges (
   charge_index integer not null,
-  shipment_id text references shipments (shipment_id) on delete cascade ,
+  shipment_id text,
   amount numeric,
   description text,
   unique (charge_index, shipment_id)

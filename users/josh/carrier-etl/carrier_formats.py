@@ -112,11 +112,6 @@ fedex_field_names = [
     'Shipment Notes',
 ]
 
-fedex_multi_fields = [
-    'Tracking ID Charge Description',
-    'Tracking ID Charge Amount',
-]
-
 fedex_cols = normalize(fedex_field_names)
 ups_cols = normalize([
     'Version',
